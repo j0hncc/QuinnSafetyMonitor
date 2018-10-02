@@ -37,16 +37,19 @@ char mqtt_port[6] = "";
 char mqtt_username[41] = "";
 char mqtt_password[41] = "";
 
-String topic_prefix = "blorp1";
-const char * version = "version 2.3 Quinn";
+String topic_prefix = "<topic>";
+const char * version = "version 2.4 Quinn";
+
+const char * APSSID = "QuinnConfig"; 
+const char * APpassword = "<APpassword>";
 
 WiFiClient espClient;
 PubSubClient mqclient(espClient);
-long lastPub, pubWait=300000;  // pubWait = milliseconds between publish
+unsigned long pubWait=300000, lastPub=-pubWait;  // pubWait = milliseconds between publish
 WiFiManager wifiManager;
 
-long lastMQ = 0;        // mq timeout settings
-long mqTimeout = 15000;
+unsigned long lastMQ = 0;        // mq timeout settings
+unsigned long mqTimeout = 30000;
 
 void readAndPublish();
 void startConfigPortal();
@@ -109,7 +112,8 @@ void mqcallback(char* topic, byte* payload, unsigned int length)
         if (msg == "config")
         {
             // Serial.println( "Configing");
-            startConfigPortal();
+            wifiManager.resetSettings();
+            // startConfigPortal();
         }
         return;
     }
@@ -142,8 +146,8 @@ boolean mqreconnect()
     {
         lastMQ=millis();
         Serial.println("MQ connected, publishing");
-        mqclient.publish( (topic_prefix + "/status/lwt").c_str(),"online", 1);
         mqclient.publish( (topic_prefix + "/status/version").c_str(), version, 1);
+        mqclient.publish( (topic_prefix + "/status/lwt").c_str(),"online", 1);
         mqclient.subscribe( (topic_prefix + "/cmd").c_str());
         mqclient.subscribe( (topic_prefix + "/setsec").c_str());
         readAndPublish();  // kickstart
@@ -215,7 +219,7 @@ void startConfigPortal()
     Serial.println("startConfigPortal BEGIN");
 
     wifiManager.setTimeout( 120);
-    int rc = wifiManager.startConfigPortal("QuinnConfig");
+    int rc = wifiManager.startConfigPortal(APSSID, APpassword);
     Serial.printf("wifiManager.startConfigPortal rc=%d\n", rc);
     if ( ! rc )   // to force reconfig
     {
@@ -279,13 +283,13 @@ void setup()
     if ( !f) Serial.println("Error opening file for reading");
     f.println("hello from file");
     f.close();
-    */
     File f = SPIFFS.open("/myprop.txt","r");
     if ( !f) Serial.println("Error opening file for reading");
     String ans = f.readStringUntil( '\n');
     Serial.println(ans);
     f.close();
-
+    */
+    
     ////////////////////////////////////  Wifi
     /* replaced with WM autoconnect
     WiFi.mode(WIFI_STA);
@@ -397,6 +401,7 @@ void setup()
 /****************************************************************************** Loop ************/
 void loop()
 {
+
     /* wifi */
     if ( ! WiFi.isConnected() )
     {
@@ -420,7 +425,7 @@ void loop()
         {
             Serial.println("mq timeout, starting portal");
             startConfigPortal( ); 
-            Serial.println("Ressetting ESP, not sure why");
+            Serial.println("Restarting ESP");
             lastMQ = now;
             ESP.restart(); 
             delay(5000);  
@@ -428,20 +433,18 @@ void loop()
     }
     mqclient.loop();
 
-    // bme
-    // publish every so often
-    now=millis();
-    if ( pubWait > 0 && (now - lastPub > pubWait))
-    {
-        lastPub = now;
-        readAndPublish();
-    }
+    readAndPublish();
 
 }  // loop
 
 // return 1 for success, 0, for error
 void readAndPublish()
 {
+    // only publish every so often.  If it's not time yet, bail out
+    long now=millis();
+    if ( pubWait <=0 || (now - lastPub < pubWait))
+        return;
+
     digitalWrite( LED_BUILTIN, LOW);
     BME280::TempUnit tempUnit(BME280::TempUnit_Fahrenheit);
     BME280::PresUnit presUnit(BME280::PresUnit_inHg);  // PresUnit_inHg, PresUnit_Pa
@@ -467,6 +470,8 @@ void readAndPublish()
     topic= topic_prefix + "/press/inHg";
     snprintf( msg, 10, "%.2f", pres);
     mqpublish( topic, String(msg), 1);
+
+    lastPub = now;
 
     /*    second thermo
     topic= topic_prefix + "/temp2/degF";
